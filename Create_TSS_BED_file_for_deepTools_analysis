@@ -1,0 +1,47 @@
+library(GenomicFeatures)
+library(txdbmaker)
+library(GenomicRanges)
+
+# Input GFF
+gff <- "/Users/abdullahalmohit/Desktop/ChiPSeq/genomic.nuclear.gff"
+
+# Output BED
+output <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis/TSS_Heatmap/Arabidopsis_TAIR10_TSS.bed"
+
+# Create TxDb
+txdb <- makeTxDbFromGFF(gff)
+
+# Extract genes
+gene_gr <- genes(txdb)
+
+# Extract TSS (1 bp)
+tss <- promoters(
+  gene_gr,
+  upstream = 0,
+  downstream = 1
+)
+
+# Convert to BED6
+bed <- data.frame(
+  chr = as.character(seqnames(tss)),
+  start = start(tss) - 1,
+  end = end(tss),
+  name = names(tss),
+  score = 0,
+  strand = as.character(strand(tss))
+)
+
+# Remove missing gene names
+bed <- bed[!is.na(bed$name), ]
+
+# Save BED (without header)
+write.table(
+  bed,
+  file = output,
+  sep = "\t",
+  quote = FALSE,
+  row.names = FALSE,
+  col.names = FALSE
+)
+
+cat("Total TSS regions:", nrow(bed), "\n")
