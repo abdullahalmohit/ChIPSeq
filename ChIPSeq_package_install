@@ -1,0 +1,24 @@
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+
+BiocManager::install(c(
+  "DiffBind",
+  "DESeq2",
+  "ChIPseeker",
+  "GenomicFeatures",
+  "txdbmaker",
+  "GenomicRanges",
+  "SummarizedExperiment",
+  "AnnotationDbi",
+  "org.At.tair.db",
+  "clusterProfiler",
+  "enrichplot"
+), ask = FALSE, update = FALSE)
+
+install.packages(c(
+  "ggplot2",
+  "dplyr",
+  "readr",
+  "pheatmap"
+))
