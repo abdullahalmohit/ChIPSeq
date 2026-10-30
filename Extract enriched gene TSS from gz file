@@ -1,0 +1,708 @@
+
+# ============================================================
+# UNIVERSAL EXTRACTION OF GENES WITH ENRICHED TSS
+# Arabidopsis thaliana
+#
+# Supports any number of samples and conditions.
+#
+# Input: deepTools computeMatrix reference-point output
+# Output: Gene ID TXT files + signal CSV files
+#
+# ONLY CHANGE THE TWO PATHS IN SECTION 1.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. INPUT AND OUTPUT PATHS
+# ------------------------------------------------------------
+
+input <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis/TSS_Heatmap/H3K27me3_TSS_matrix.gz"
+
+output_dir <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis/TSS_Heatmap/TSS_Enriched_Genes"
+
+
+dir.create(
+  output_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+if (!file.exists(input)) {
+  stop("Matrix file not found: ", input)
+}
+
+
+# ------------------------------------------------------------
+# 2. ANALYSIS PARAMETERS
+# ------------------------------------------------------------
+
+# Calculate mean signal within +/- 500 bp of TSS
+
+tss_window <- 500
+
+# Select genes in the top 10% of TSS signal
+
+top_percent <- 10
+
+if (top_percent <= 0 || top_percent > 100) {
+  stop("top_percent must be between 0 and 100.")
+}
+
+
+# ------------------------------------------------------------
+# 3. LOAD REQUIRED PACKAGE
+# ------------------------------------------------------------
+
+if (!requireNamespace("jsonlite", quietly = TRUE)) {
+  stop(
+    "Please install jsonlite first:\n",
+    "install.packages('jsonlite')"
+  )
+}
+
+
+# ------------------------------------------------------------
+# 4. READ DEEPTOOLS MATRIX
+# ------------------------------------------------------------
+
+con <- gzfile(input, open = "rt")
+
+header <- readLines(
+  con,
+  n = 1,
+  warn = FALSE
+)
+
+if (
+  length(header) != 1 ||
+  !startsWith(header, "@")
+) {
+  close(con)
+  stop("Invalid deepTools computeMatrix header.")
+}
+
+metadata <- jsonlite::fromJSON(
+  substring(header, 2),
+  simplifyVector = TRUE
+)
+
+dat <- read.delim(
+  con,
+  header = FALSE,
+  sep = "\t",
+  quote = "",
+  comment.char = "",
+  check.names = FALSE,
+  stringsAsFactors = FALSE,
+  na.strings = c("nan", "NaN", "NA", "")
+)
+
+close(con)
+
+cat("\nMatrix dimensions:\n")
+print(dim(dat))
+
+
+# ------------------------------------------------------------
+# 5. EXTRACT GENE IDS AND SIGNAL MATRIX
+# ------------------------------------------------------------
+
+# Standard deepTools matrix:
+#
+# V1 = chromosome
+# V2 = start
+# V3 = end
+# V4 = gene ID / region name
+# V5 = score
+# V6 = strand
+# V7 onward = signal values
+
+if (ncol(dat) < 7) {
+  stop("Matrix contains insufficient columns.")
+}
+
+gene_ids <- as.character(dat[[4]])
+
+signal <- as.matrix(
+  dat[, 7:ncol(dat), drop = FALSE]
+)
+
+storage.mode(signal) <- "numeric"
+
+
+# ------------------------------------------------------------
+# 6. AUTOMATIC SAMPLE DETECTION
+# ------------------------------------------------------------
+
+sample_names <- as.character(
+  unlist(metadata$sample_labels)
+)
+
+boundaries <- as.integer(
+  unlist(metadata$sample_boundaries)
+)
+
+n_samples <- length(sample_names)
+
+if (n_samples < 1) {
+  stop("No sample labels detected in matrix metadata.")
+}
+
+if (anyNA(sample_names) || any(!nzchar(sample_names))) {
+  stop("Matrix contains missing or blank sample labels.")
+}
+
+if (anyDuplicated(sample_names)) {
+  stop(
+    "Duplicate sample labels detected. ",
+    "Please use unique --samplesLabel values in computeMatrix."
+  )
+}
+
+if (length(boundaries) != n_samples + 1) {
+  stop(
+    "Sample boundary mismatch.\n",
+    "Detected samples: ", n_samples, "\n",
+    "Expected boundaries: ", n_samples + 1, "\n",
+    "Actual boundaries: ", length(boundaries)
+  )
+}
+
+if (
+  anyNA(boundaries) ||
+  boundaries[1] != 0 ||
+  any(diff(boundaries) <= 0)
+) {
+  stop("Invalid sample boundaries in matrix metadata.")
+}
+
+if (tail(boundaries, 1) != ncol(signal)) {
+  stop(
+    "Sample boundaries do not match signal matrix columns."
+  )
+}
+
+cat("\n====================================\n")
+cat("AUTOMATIC SAMPLE DETECTION\n")
+cat("====================================\n")
+
+cat("\nNumber of samples:", n_samples, "\n")
+
+print(sample_names)
+
+cat("\nSample boundaries:\n")
+print(boundaries)
+
+
+# ------------------------------------------------------------
+# 7. AUTOMATIC CONDITION DETECTION
+# ------------------------------------------------------------
+
+# Supported replicate naming examples:
+#
+# Control_1          -> Control
+# Control_2          -> Control
+#
+# FIE_1              -> FIE
+# FIE_2              -> FIE
+#
+# Amir-FIE_1         -> Amir-FIE
+# Amir-FIE_2         -> Amir-FIE
+#
+# 10Day_Rep1         -> 10Day
+# 10Day_Rep2         -> 10Day
+#
+# ImbibedSeed_Rep1   -> ImbibedSeed
+# ImbibedSeed_Rep2   -> ImbibedSeed
+#
+# A label without a recognized replicate suffix
+# is treated as its own condition.
+
+detect_condition <- function(x) {
+  
+  # Remove _Rep1, _Rep2, _Replicate1, etc.
+  
+  x <- sub(
+    "[_ -][Rr]ep(?:licate)?[_ -]?[0-9]+$",
+    "",
+    x,
+    perl = TRUE
+  )
+  
+  # Remove trailing _1, _2, _3, etc.
+  
+  x <- sub(
+    "_[0-9]+$",
+    "",
+    x
+  )
+  
+  return(x)
+}
+
+sample_conditions <- vapply(
+  sample_names,
+  detect_condition,
+  character(1),
+  USE.NAMES = FALSE
+)
+
+conditions <- unique(sample_conditions)
+
+n_conditions <- length(conditions)
+
+sample_info <- data.frame(
+  SampleID = sample_names,
+  Condition = sample_conditions,
+  stringsAsFactors = FALSE
+)
+
+cat("\n====================================\n")
+cat("AUTOMATIC CONDITION DETECTION\n")
+cat("====================================\n")
+
+print(sample_info)
+
+cat("\nNumber of conditions:", n_conditions, "\n")
+
+write.csv(
+  sample_info,
+  file.path(
+    output_dir,
+    "Detected_Sample_Metadata.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ------------------------------------------------------------
+# 8. READ TSS DISTANCES FROM METADATA
+# ------------------------------------------------------------
+
+upstream <- as.numeric(
+  unlist(metadata$upstream)[1]
+)
+
+downstream <- as.numeric(
+  unlist(metadata$downstream)[1]
+)
+
+if (
+  !is.finite(upstream) ||
+  !is.finite(downstream)
+) {
+  stop("Cannot determine TSS distances from metadata.")
+}
+
+if (tss_window > min(upstream, downstream)) {
+  stop(
+    "Requested TSS window exceeds the matrix coverage."
+  )
+}
+
+cat("\nUpstream distance:", upstream, "bp\n")
+cat("Downstream distance:", downstream, "bp\n")
+cat("Selected TSS window: +/-", tss_window, "bp\n")
+
+
+# ------------------------------------------------------------
+# 9. SAFE MEAN FUNCTION
+# ------------------------------------------------------------
+
+safe_mean <- function(x) {
+  
+  x <- x[is.finite(x)]
+  
+  if (length(x) == 0) {
+    return(NA_real_)
+  }
+  
+  mean(x)
+}
+
+
+# ------------------------------------------------------------
+# 10. CALCULATE MEAN TSS SIGNAL FOR EVERY SAMPLE
+# ------------------------------------------------------------
+
+sample_signal <- matrix(
+  NA_real_,
+  nrow = nrow(signal),
+  ncol = n_samples
+)
+
+colnames(sample_signal) <- sample_names
+
+for (i in seq_len(n_samples)) {
+  
+  # deepTools boundaries use zero-based indexing.
+  # Convert to R one-based indexing.
+  
+  first_col <- boundaries[i] + 1
+  
+  last_col <- boundaries[i + 1]
+  
+  sample_matrix <- signal[
+    ,
+    first_col:last_col,
+    drop = FALSE
+  ]
+  
+  n_bins <- ncol(sample_matrix)
+  
+  bin_width <- (
+    upstream + downstream
+  ) / n_bins
+  
+  # Calculate bin-center positions relative to TSS
+  
+  positions <- -upstream +
+    (seq_len(n_bins) - 0.5) * bin_width
+  
+  selected_bins <- which(
+    positions >= -tss_window &
+      positions <= tss_window
+  )
+  
+  if (length(selected_bins) == 0) {
+    stop(
+      "No bins found inside selected TSS window for: ",
+      sample_names[i]
+    )
+  }
+  
+  sample_signal[, i] <- apply(
+    sample_matrix[
+      ,
+      selected_bins,
+      drop = FALSE
+    ],
+    1,
+    safe_mean
+  )
+  
+  cat(
+    "Processed:",
+    sample_names[i],
+    "| Selected bins:",
+    length(selected_bins),
+    "\n"
+  )
+}
+
+
+# ------------------------------------------------------------
+# 11. EXPORT INDIVIDUAL SAMPLE SIGNAL
+# ------------------------------------------------------------
+
+sample_signal_df <- data.frame(
+  GeneID = gene_ids,
+  sample_signal,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+write.csv(
+  sample_signal_df,
+  file.path(
+    output_dir,
+    "All_Samples_TSS_Signal.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ------------------------------------------------------------
+# 12. AUTOMATIC CONDITION-LEVEL MEAN SIGNAL
+# ------------------------------------------------------------
+
+condition_signal <- data.frame(
+  GeneID = gene_ids,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+for (condition in conditions) {
+  
+  # Find all replicates belonging to this condition
+  
+  replicate_indices <- which(
+    sample_conditions == condition
+  )
+  
+  replicate_matrix <- sample_signal[
+    ,
+    replicate_indices,
+    drop = FALSE
+  ]
+  
+  condition_signal[[condition]] <- apply(
+    replicate_matrix,
+    1,
+    safe_mean
+  )
+  
+  cat(
+    "Condition:",
+    condition,
+    "| Replicates:",
+    length(replicate_indices),
+    "\n"
+  )
+}
+
+
+# ------------------------------------------------------------
+# 13. REMOVE MISSING GENE IDS
+# ------------------------------------------------------------
+
+condition_signal <- condition_signal[
+  !is.na(condition_signal$GeneID) &
+    nzchar(trimws(condition_signal$GeneID)),
+  ,
+  drop = FALSE
+]
+
+
+# ------------------------------------------------------------
+# 14. MERGE DUPLICATE GENE IDS
+# ------------------------------------------------------------
+
+# Multiple TSS regions may correspond to the same gene.
+# Average their signals to retain one row per gene.
+
+condition_signal <- aggregate(
+  condition_signal[
+    ,
+    conditions,
+    drop = FALSE
+  ],
+  by = list(
+    GeneID = condition_signal$GeneID
+  ),
+  FUN = safe_mean
+)
+
+# Preserve original condition names
+# including names such as Amir-FIE.
+
+colnames(condition_signal) <- c(
+  "GeneID",
+  conditions
+)
+
+
+# ------------------------------------------------------------
+# 15. EXPORT COMPLETE GENE-LEVEL SIGNAL
+# ------------------------------------------------------------
+
+write.csv(
+  condition_signal,
+  file.path(
+    output_dir,
+    "All_Genes_TSS_H3K27me3_Signal.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ------------------------------------------------------------
+# 16. EXTRACT TOP 10% ENRICHED GENES
+# ------------------------------------------------------------
+
+enriched_sets <- list()
+
+summary_table <- data.frame(
+  Condition = character(),
+  Total_Genes = integer(),
+  Enriched_Genes = integer(),
+  Signal_Cutoff = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (condition in conditions) {
+  
+  cat("\nProcessing condition:", condition, "\n")
+  
+  ranked <- condition_signal[
+    is.finite(condition_signal[[condition]]),
+    c("GeneID", condition),
+    drop = FALSE
+  ]
+  
+  ranked <- ranked[
+    order(
+      ranked[[condition]],
+      decreasing = TRUE
+    ),
+    ,
+    drop = FALSE
+  ]
+  
+  if (nrow(ranked) == 0) {
+    warning("No valid genes found for ", condition)
+    next
+  }
+  
+  # Calculate number of genes in the top percentage
+  
+  n_select <- max(
+    1,
+    ceiling(
+      nrow(ranked) * top_percent / 100
+    )
+  )
+  
+  # Include all genes tied at the cutoff
+  
+  cutoff <- ranked[[condition]][n_select]
+  
+  enriched <- ranked[
+    ranked[[condition]] >= cutoff,
+    ,
+    drop = FALSE
+  ]
+  
+  enriched_sets[[condition]] <- enriched$GeneID
+  
+  # TXT: Gene IDs only
+  
+  writeLines(
+    enriched$GeneID,
+    con = file.path(
+      output_dir,
+      paste0(
+        condition,
+        "_Enriched_TSS_Genes.txt"
+      )
+    )
+  )
+  
+  # CSV: Gene IDs and enrichment signal
+  
+  colnames(enriched) <- c(
+    "GeneID",
+    "Mean_TSS_Signal"
+  )
+  
+  write.csv(
+    enriched,
+    file.path(
+      output_dir,
+      paste0(
+        condition,
+        "_Enriched_TSS_Genes.csv"
+      )
+    ),
+    row.names = FALSE
+  )
+  
+  # Update summary
+  
+  summary_table <- rbind(
+    summary_table,
+    data.frame(
+      Condition = condition,
+      Total_Genes = nrow(ranked),
+      Enriched_Genes = nrow(enriched),
+      Signal_Cutoff = cutoff
+    )
+  )
+  
+  cat(
+    "Enriched genes:",
+    nrow(enriched),
+    "\n"
+  )
+  
+  cat(
+    "Signal cutoff:",
+    cutoff,
+    "\n"
+  )
+}
+
+
+# ------------------------------------------------------------
+# 17. EXTRACT GENES COMMON TO ALL CONDITIONS
+# ------------------------------------------------------------
+
+if (length(enriched_sets) >= 2) {
+  
+  common_genes <- Reduce(
+    intersect,
+    enriched_sets
+  )
+  
+  writeLines(
+    sort(common_genes),
+    con = file.path(
+      output_dir,
+      "Common_Enriched_TSS_Genes.txt"
+    )
+  )
+  
+  write.csv(
+    data.frame(
+      GeneID = sort(common_genes)
+    ),
+    file.path(
+      output_dir,
+      "Common_Enriched_TSS_Genes.csv"
+    ),
+    row.names = FALSE
+  )
+  
+  cat(
+    "\nCommon enriched genes:",
+    length(common_genes),
+    "\n"
+  )
+}
+
+
+# ------------------------------------------------------------
+# 18. EXPORT SUMMARY
+# ------------------------------------------------------------
+
+write.csv(
+  summary_table,
+  file.path(
+    output_dir,
+    "TSS_Enrichment_Summary.csv"
+  ),
+  row.names = FALSE
+)
+
+print(summary_table)
+
+
+# ------------------------------------------------------------
+# 19. SAVE COMPLETE ANALYSIS
+# ------------------------------------------------------------
+
+saveRDS(
+  list(
+    Metadata = metadata,
+    Sample_Info = sample_info,
+    Sample_Signal = sample_signal_df,
+    Condition_Signal = condition_signal,
+    Enriched_Gene_Sets = enriched_sets,
+    Summary = summary_table
+  ),
+  file.path(
+    output_dir,
+    "Complete_TSS_Analysis.rds"
+  )
+)
+
+
+cat("\n============================================\n")
+cat("TSS ENRICHMENT EXTRACTION COMPLETED\n")
+cat("============================================\n")
+
+cat("\nSamples analysed:", n_samples, "\n")
+cat("Conditions detected:", n_conditions, "\n")
+
+cat("\nOutput directory:\n")
+cat(output_dir, "\n")
