@@ -1,0 +1,499 @@
+
+# ============================================================
+# H3K27me3 TSS ENRICHMENT PROFILE
+# Arabidopsis thaliana
+#
+# One merged graph
+# Nine individual samples
+# Fixed legend outside the plotting area
+# PDF + 600 DPI PNG output
+# ============================================================
+
+library(ggplot2)
+
+# ------------------------------------------------------------
+# 1. Input and output paths
+# ------------------------------------------------------------
+
+input <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis/TSS_Heatmap/H3K27me3_TSS_profile_data.tab"
+
+output_dir <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis/TSS_Heatmap"
+
+if (!file.exists(input)) {
+  stop("Input file not found: ", input)
+}
+
+dir.create(
+  output_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# ------------------------------------------------------------
+# 2. Define sample names
+# ------------------------------------------------------------
+
+sample_names <- c(
+  "Control_1",
+  "Control_2",
+  "Control_3",
+  "FIE_1",
+  "FIE_2",
+  "FIE_3",
+  "Amir-FIE_1",
+  "Amir-FIE_2",
+  "Amir-FIE_3"
+)
+
+# ------------------------------------------------------------
+# 3. Read deepTools profile data
+# ------------------------------------------------------------
+
+lines <- readLines(input, warn = FALSE)
+
+lines <- lines[nzchar(trimws(lines))]
+
+if (length(lines) == 0) {
+  stop("The input file is empty.")
+}
+
+# Display a compact preview
+cat("\nFirst five lines of the input file:\n")
+
+for (i in seq_len(min(5, length(lines)))) {
+  cat(substr(lines[i], 1, 160), "\n")
+}
+
+# deepTools plotProfile exports may have comment metadata,
+# a position header, and profile rows.
+
+comment_lines <- grep("^#", lines, value = TRUE)
+
+data_lines <- lines[!grepl("^#", lines)]
+
+if (length(data_lines) == 0) {
+  stop("No numerical data found in the input file.")
+}
+
+# Read the table without printing its many columns.
+
+dat <- read.table(
+  text = data_lines,
+  header = FALSE,
+  sep = "\t",
+  fill = TRUE,
+  quote = "",
+  comment.char = "",
+  check.names = FALSE,
+  stringsAsFactors = FALSE,
+  na.strings = c("nan", "NaN", "NA", "None", "")
+)
+
+cat("\nImported table dimensions:\n")
+print(dim(dat))
+
+# ------------------------------------------------------------
+# 4. Identify sample rows and numerical columns
+# ------------------------------------------------------------
+
+# Convert all columns to numeric where possible.
+numeric_dat <- as.data.frame(
+  lapply(dat, function(x) {
+    suppressWarnings(as.numeric(as.character(x)))
+  })
+)
+
+# Detect rows containing meaningful numeric signal values.
+numeric_counts <- rowSums(!is.na(numeric_dat))
+
+# Exclude rows that contain no numerical values.
+keep_rows <- numeric_counts > 2
+
+numeric_dat <- numeric_dat[keep_rows, , drop = FALSE]
+dat <- dat[keep_rows, , drop = FALSE]
+
+# Remove columns containing no numerical signal.
+keep_cols <- colSums(!is.na(numeric_dat)) > 0
+
+numeric_dat <- numeric_dat[, keep_cols, drop = FALSE]
+
+cat("\nNumerical table dimensions:\n")
+print(dim(numeric_dat))
+
+# ------------------------------------------------------------
+# 5. Handle deepTools export orientation
+# ------------------------------------------------------------
+
+# Nine samples may appear as:
+# A. Nine rows with many position columns
+# B. Nine columns with many position rows
+# C. A header/metadata row followed by nine sample rows
+
+if (nrow(numeric_dat) == 9) {
+  
+  cat("\nDetected format: samples stored as rows.\n")
+  
+  signal_matrix <- as.matrix(numeric_dat)
+  
+} else if (ncol(numeric_dat) == 9) {
+  
+  cat("\nDetected format: samples stored as columns.\n")
+  
+  signal_matrix <- t(as.matrix(numeric_dat))
+  
+} else {
+  
+  # Some deepTools exports contain one row per sample with
+  # multiple genomic-region groups. Try matching the first
+  # column against the expected sample names.
+  
+  first_col <- trimws(as.character(dat[[1]]))
+  
+  matched <- match(sample_names, first_col)
+  
+  if (all(!is.na(matched))) {
+    
+    cat("\nDetected format: sample-labelled rows.\n")
+    
+    signal_matrix <- as.matrix(
+      numeric_dat[matched, , drop = FALSE]
+    )
+    
+  } else {
+    
+    stop(
+      "\nUnable to identify exactly nine sample profiles.\n",
+      "Detected ", nrow(numeric_dat), " rows and ",
+      ncol(numeric_dat), " numerical columns.\n",
+      "Please inspect the first lines of the deepTools export."
+    )
+    
+  }
+}
+
+storage.mode(signal_matrix) <- "numeric"
+
+rownames(signal_matrix) <- sample_names
+
+# Remove columns with no usable values.
+signal_matrix <- signal_matrix[
+  ,
+  colSums(!is.na(signal_matrix)) > 0,
+  drop = FALSE
+]
+
+if (nrow(signal_matrix) != 9) {
+  stop("The final signal matrix must contain nine samples.")
+}
+
+n_bins <- ncol(signal_matrix)
+
+cat("\nFinal signal matrix:\n")
+cat("Samples:", nrow(signal_matrix), "\n")
+cat("Position bins:", n_bins, "\n")
+
+# ------------------------------------------------------------
+# 6. Create genomic positions
+# ------------------------------------------------------------
+
+# Original computeMatrix configuration:
+# 3000 bp upstream + 3000 bp downstream of TSS.
+
+upstream <- 3000
+downstream <- 3000
+
+bin_width <- (upstream + downstream) / n_bins
+
+positions <- seq(
+  from = -upstream + bin_width / 2,
+  to = downstream - bin_width / 2,
+  length.out = n_bins
+)
+
+# ------------------------------------------------------------
+# 7. Convert to long-format data
+# ------------------------------------------------------------
+
+plot_data <- data.frame(
+  Position = rep(positions, times = 9),
+  
+  Signal = as.vector(
+    t(signal_matrix)
+  ),
+  
+  Sample = rep(
+    sample_names,
+    each = n_bins
+  )
+)
+
+plot_data$Sample <- factor(
+  plot_data$Sample,
+  levels = sample_names
+)
+
+# Add experimental conditions.
+
+plot_data$Condition <- ifelse(
+  grepl("^Control", plot_data$Sample),
+  "Control",
+  ifelse(
+    grepl("^FIE_", plot_data$Sample),
+    "FIE",
+    "Amir-FIE"
+  )
+)
+
+cat("\nPlotting dataframe preview:\n")
+
+print(head(plot_data, 10))
+
+# ------------------------------------------------------------
+# 8. Define colours for all nine samples
+# ------------------------------------------------------------
+
+sample_colors <- c(
+  
+  # Control: blue shades
+  "Control_1" = "#2166AC",
+  "Control_2" = "#4393C3",
+  "Control_3" = "#92C5DE",
+  
+  # FIE: red shades
+  "FIE_1" = "#B2182B",
+  "FIE_2" = "#D6604D",
+  "FIE_3" = "#F4A582",
+  
+  # Amir-FIE: green shades
+  "Amir-FIE_1" = "#238B45",
+  "Amir-FIE_2" = "#41AB5D",
+  "Amir-FIE_3" = "#A1D99B"
+  
+)
+
+# ------------------------------------------------------------
+# 9. Generate one merged enrichment profile
+# ------------------------------------------------------------
+
+p <- ggplot(
+  plot_data,
+  aes(
+    x = Position,
+    y = Signal,
+    colour = Sample,
+    group = Sample
+  )
+) +
+  
+  geom_line(
+    linewidth = 1,
+    na.rm = TRUE
+  ) +
+  
+  # Mark TSS position
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    linewidth = 0.6,
+    colour = "grey40"
+  ) +
+  
+  scale_colour_manual(
+    values = sample_colors,
+    breaks = sample_names,
+    drop = FALSE
+  ) +
+  
+  scale_x_continuous(
+    limits = c(-3000, 3000),
+    
+    breaks = c(
+      -3000,
+      -2000,
+      -1000,
+      0,
+      1000,
+      2000,
+      3000
+    ),
+    
+    labels = c(
+      "-3 kb",
+      "-2 kb",
+      "-1 kb",
+      "TSS",
+      "+1 kb",
+      "+2 kb",
+      "+3 kb"
+    ),
+    
+    expand = c(0, 0)
+  ) +
+  
+  labs(
+    title = "H3K27me3 enrichment around TSS",
+    
+    subtitle = paste(
+      "Arabidopsis thaliana |",
+      "Control vs FIE vs Amir-FIE"
+    ),
+    
+    x = "Distance from transcription start site",
+    
+    y = "Mean H3K27me3 signal (CPM)",
+    
+    colour = "Samples"
+  ) +
+  
+  theme_classic(
+    base_size = 14
+  ) +
+  
+  theme(
+    
+    plot.title = element_text(
+      size = 18,
+      face = "bold",
+      hjust = 0.5
+    ),
+    
+    plot.subtitle = element_text(
+      size = 12,
+      hjust = 0.5
+    ),
+    
+    axis.title.x = element_text(
+      size = 13,
+      face = "bold",
+      margin = margin(t = 12)
+    ),
+    
+    axis.title.y = element_text(
+      size = 13,
+      face = "bold",
+      margin = margin(r = 12)
+    ),
+    
+    axis.text = element_text(
+      size = 11
+    ),
+    
+    # --------------------------------------
+    # FIXED LEGEND OUTSIDE THE GRAPH
+    # --------------------------------------
+    
+    legend.position = "right",
+    
+    legend.justification = "center",
+    
+    legend.direction = "vertical",
+    
+    legend.title = element_text(
+      size = 13,
+      face = "bold"
+    ),
+    
+    legend.text = element_text(
+      size = 11
+    ),
+    
+    legend.key.width = grid::unit(
+      1.2,
+      "cm"
+    ),
+    
+    legend.key.height = grid::unit(
+      0.6,
+      "cm"
+    ),
+    
+    legend.spacing.y = grid::unit(
+      0.12,
+      "cm"
+    ),
+    
+    plot.margin = margin(
+      20,
+      25,
+      20,
+      20
+    )
+  ) +
+  
+  guides(
+    colour = guide_legend(
+      title = "Samples",
+      ncol = 1,
+      byrow = TRUE,
+      override.aes = list(
+        linewidth = 2
+      )
+    )
+  )
+
+# ------------------------------------------------------------
+# 10. Display graph
+# ------------------------------------------------------------
+
+print(p)
+
+# ------------------------------------------------------------
+# 11. Export publication-quality PDF
+# ------------------------------------------------------------
+
+pdf_file <- file.path(
+  output_dir,
+  "H3K27me3_TSS_Publication_Profile.pdf"
+)
+
+ggsave(
+  filename = pdf_file,
+  plot = p,
+  width = 14,
+  height = 7,
+  units = "in",
+  device = cairo_pdf
+)
+
+# ------------------------------------------------------------
+# 12. Export high-resolution PNG
+# ------------------------------------------------------------
+
+png_file <- file.path(
+  output_dir,
+  "H3K27me3_TSS_Publication_Profile.png"
+)
+
+ggsave(
+  filename = png_file,
+  plot = p,
+  width = 14,
+  height = 7,
+  units = "in",
+  dpi = 600,
+  bg = "white"
+)
+
+# ------------------------------------------------------------
+# 13. Export plotting data as CSV
+# ------------------------------------------------------------
+
+write.csv(
+  plot_data,
+  file = file.path(
+    output_dir,
+    "H3K27me3_TSS_Publication_Profile_Data.csv"
+  ),
+  row.names = FALSE
+)
+
+cat("\n========================================\n")
+cat("TSS PROFILE ANALYSIS COMPLETED\n")
+cat("========================================\n")
+
+cat("\nPDF:\n", pdf_file, "\n")
+cat("\nPNG:\n", png_file, "\n")
+
+cat("\nNine samples plotted together.\n")
+cat("Legend positioned outside the graph.\n")
+
