@@ -12,21 +12,30 @@ base = "/Users/abdullahalmohit/Desktop/ChiPSeq"
 out = base + "/Final_Analysis/samples.csv"
 
 # ==========================================
-# 2. MANUALLY ENTER YOUR SAMPLES
+# 2. ENTER YOUR SAMPLE INFORMATION
 # ==========================================
 
 # Format:
-# (SRR_ID, Condition, Replicate, Factor, Input_SRR_ID)
+# (Sample_ID, Condition, Replicate, Factor, Input_Control_ID)
+#
+# If no input control is used, enter an empty string ("").
 
 SAMPLES = [
 
-    ("SRR31350537", "10Day", 1, "H3K27me3", "SRR31350539"),
+    # Amir-FIE samples
+    ("SRR13085078", "Amir-FIE", 1, "H3K27me3", ""),
+    ("SRR13085079", "Amir-FIE", 2, "H3K27me3", ""),
+    ("SRR13085080", "Amir-FIE", 3, "H3K27me3", ""),
 
-    ("SRR31350538", "10Day", 2, "H3K27me3", "SRR31350539"),
+    # Control samples
+    ("SRR13085081", "Control", 1, "H3K27me3", ""),
+    ("SRR13085082", "Control", 2, "H3K27me3", ""),
+    ("SRR13085083", "Control", 3, "H3K27me3", ""),
 
-    ("SRR31350546", "imbided_seed", 1, "H3K27me3", "SRR31350548"),
-
-    ("SRR31350547", "imbided_seed", 2, "H3K27me3", "SRR31350548"),
+    # FIE samples
+    ("SRR13085084", "FIE", 1, "H3K27me3", ""),
+    ("SRR13085085", "FIE", 2, "H3K27me3", ""),
+    ("SRR13085086", "FIE", 3, "H3K27me3", ""),
 
 ]
 
