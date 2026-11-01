@@ -1,0 +1,160 @@
+python3 - <<'PY'
+import csv
+import os
+from collections import Counter
+
+# ==========================================
+# 1. PROJECT DIRECTORY
+# ==========================================
+
+base = "/Users/abdullahalmohit/Desktop/ChiPSeq"
+
+out = base + "/Final_Analysis/samples.csv"
+
+# ==========================================
+# 2. MANUALLY ENTER YOUR SAMPLES
+# ==========================================
+
+# Format:
+# (SRR_ID, Condition, Replicate, Factor, Input_SRR_ID)
+
+SAMPLES = [
+
+    ("SRR31350537", "10Day", 1, "H3K27me3", "SRR31350539"),
+
+    ("SRR31350538", "10Day", 2, "H3K27me3", "SRR31350539"),
+
+    ("SRR31350546", "imbided_seed", 1, "H3K27me3", "SRR31350548"),
+
+    ("SRR31350547", "imbided_seed", 2, "H3K27me3", "SRR31350548"),
+
+]
+
+# ==========================================
+# 3. FILE CONFIGURATION
+# ==========================================
+
+bam_dir = base + "/BAM"
+peak_dir = base + "/macs3_output/broad"
+
+bam_suffix = "_sorted_dedup.bam"
+peak_suffix = "_broad_peaks.broadPeak"
+
+# ==========================================
+# 4. VALIDATE SAMPLE ANNOTATIONS
+# ==========================================
+
+ids = [s[0] for s in SAMPLES]
+
+duplicates = [
+    sid for sid, count in Counter(ids).items()
+    if count > 1
+]
+
+if duplicates:
+    raise ValueError(
+        "Duplicate ChIP sample IDs detected: " +
+        ", ".join(duplicates) +
+        ". Correct the SAMPLES section before running."
+    )
+
+replicate_keys = [
+    (s[1], s[3], s[2]) for s in SAMPLES
+]
+
+duplicate_reps = [
+    key for key, count in Counter(replicate_keys).items()
+    if count > 1
+]
+
+if duplicate_reps:
+    raise ValueError(
+        "Duplicate replicate annotations detected: " +
+        str(duplicate_reps)
+    )
+
+# ==========================================
+# 5. GENERATE SAMPLE SHEET
+# ==========================================
+
+rows = []
+
+for sample, condition, rep, factor, input_id in SAMPLES:
+
+    if not sample or not condition or not factor:
+        raise ValueError(
+            f"Incomplete annotation: {sample}"
+        )
+
+    bam = os.path.join(
+        bam_dir,
+        sample + bam_suffix
+    )
+
+    peak = os.path.join(
+        peak_dir,
+        sample + peak_suffix
+    )
+
+    control = ""
+
+    if input_id:
+        control = os.path.join(
+            bam_dir,
+            input_id + bam_suffix
+        )
+
+    for path in [bam, peak, control]:
+        if path and not os.path.isfile(path):
+            raise FileNotFoundError(path)
+
+    rows.append([
+        sample,
+        condition,
+        rep,
+        factor,
+        bam,
+        control,
+        peak,
+        "broadPeak",
+        5
+    ])
+
+# ==========================================
+# 6. EXPORT CSV
+# ==========================================
+
+os.makedirs(os.path.dirname(out), exist_ok=True)
+
+with open(out, "w", newline="") as f:
+
+    writer = csv.writer(f)
+
+    writer.writerow([
+        "SampleID",
+        "Condition",
+        "Replicate",
+        "Factor",
+        "bamReads",
+        "bamControl",
+        "Peaks",
+        "PeakCaller",
+        "ScoreCol"
+    ])
+
+    writer.writerows(rows)
+
+print("\nSample sheet generated successfully!")
+print("Output:", out)
+
+print("\nIncluded samples:")
+
+for row in rows:
+    print(
+        row[0],
+        "| Condition:", row[1],
+        "| Replicate:", row[2],
+        "| Factor:", row[3]
+    )
+
+PY
