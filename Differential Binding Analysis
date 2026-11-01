@@ -1,0 +1,268 @@
+
+library(DiffBind)
+library(DESeq2)
+library(ggplot2)
+library(GenomicRanges)
+
+out <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis"
+
+dir.create(file.path(out, "DiffBind"), showWarnings = FALSE)
+dir.create(file.path(out, "Figures"), showWarnings = FALSE)
+
+# ---------------------------------------
+# 1. Load sample information
+# ---------------------------------------
+
+samples <- read.csv(
+  file.path(out, "samples_broadPeak.csv"),
+  stringsAsFactors = FALSE
+)
+
+print(samples[, c("SampleID", "Condition", "Replicate")])
+
+stopifnot(
+  nrow(samples) == 9,
+  all(file.exists(samples$bamReads)),
+  all(file.exists(samples$Peaks))
+)
+
+# ---------------------------------------
+# 2. Initialize DiffBind
+# ---------------------------------------
+
+db <- dba(
+  sampleSheet = samples,
+  minOverlap = 2
+)
+
+print(db)
+
+# ---------------------------------------
+# 3. Count common broad regions
+# ---------------------------------------
+
+# summits=FALSE preserves broad peak widths.
+# minOverlap=2 retains regions represented
+# in at least two peak sets.
+
+db <- dba.count(
+  db,
+  summits = FALSE
+)
+
+# ---------------------------------------
+# 4. Sample quality assessment
+# ---------------------------------------
+
+pdf(
+  file.path(out, "Figures", "H3K27me3_PCA_without_input.pdf"),
+  width = 8,
+  height = 8
+)
+
+dba.plotPCA(
+  db,
+  attributes = DBA_CONDITION,
+  label = DBA_ID
+)
+
+dev.off()
+
+# Save counted object
+saveRDS(
+  db,
+  file.path(out, "DiffBind", "Counted_DiffBind.rds")
+)
+
+# ---------------------------------------
+# 5. Define comparisons
+# ---------------------------------------
+
+comparisons <- list(
+  FIE_vs_Control = c("FIE", "Control"),
+  AmirFIE_vs_Control = c("Amir-FIE", "Control"),
+  AmirFIE_vs_FIE = c("Amir-FIE", "FIE")
+)
+
+#comparisons <- list(
+  #ImbibedSeed_vs_10Day = c("imbided_seed", "10Day")
+#)
+
+# ---------------------------------------
+# 6. Differential binding analysis
+# ---------------------------------------
+
+summary_table <- data.frame()
+
+for (comparison_name in names(comparisons)) {
+  
+  cat("\nProcessing:", comparison_name, "\n")
+  
+  groups <- comparisons[[comparison_name]]
+  
+  # Start each contrast from the same
+  # original counted DiffBind object.
+  
+  d <- dba.contrast(
+    db,
+    design = "~Condition",
+    contrast = c(
+      "Condition",
+      groups[1],
+      groups[2]
+    )
+  )
+  
+  # Run DESeq2
+  d <- dba.analyze(
+    d,
+    method = DBA_DESEQ2
+  )
+  
+  # Extract all tested regions
+  result <- dba.report(
+    d,
+    contrast = 1,
+    method = DBA_DESEQ2,
+    th = 1
+  )
+  
+  df <- as.data.frame(result)
+  
+  # Export complete results
+  write.csv(
+    df,
+    file.path(
+      out, "DiffBind",
+      paste0(comparison_name, "_ALL.csv")
+    ),
+    row.names = FALSE
+  )
+  
+  # Significance threshold
+  sig <- df[
+    !is.na(df$FDR) &
+      df$FDR < 0.05 &
+      !is.na(df$Fold) &
+      abs(df$Fold) >= 1,
+    ,
+    drop = FALSE
+  ]
+  
+  gain <- sig[sig$Fold >= 1, , drop = FALSE]
+  loss <- sig[sig$Fold <= -1, , drop = FALSE]
+  
+  # Positive Fold = higher H3K27me3
+  # in the numerator condition.
+  gain <- sig[sig$Fold >= 1, ]
+  loss <- sig[sig$Fold <= -1, ]
+  
+  write.csv(
+    sig,
+    file.path(
+      out, "DiffBind",
+      paste0(comparison_name, "_Significant.csv")
+    ),
+    row.names = FALSE
+  )
+  
+  write.csv(
+    gain,
+    file.path(
+      out, "DiffBind",
+      paste0(comparison_name, "_Gain.csv")
+    ),
+    row.names = FALSE
+  )
+  
+  write.csv(
+    loss,
+    file.path(
+      out, "DiffBind",
+      paste0(comparison_name, "_Loss.csv")
+    ),
+    row.names = FALSE
+  )
+  
+  # Volcano plot
+  df$Status <- "Not significant"
+  
+  df$Status[
+    !is.na(df$FDR) &
+      df$FDR < 0.05 &
+      df$Fold >= 1
+  ] <- "Gain"
+  
+  df$Status[
+    !is.na(df$FDR) &
+      df$FDR < 0.05 &
+      df$Fold <= -1
+  ] <- "Loss"
+  
+  p <- ggplot(
+    df,
+    aes(
+      x = Fold,
+      y = -log10(pmax(FDR, 1e-300)),
+      color = Status
+    )
+  ) +
+    geom_point(alpha = 0.6, size = 1.2, na.rm = TRUE) +
+    geom_vline(
+      xintercept = c(-1, 1),
+      linetype = "dashed"
+    ) +
+    geom_hline(
+      yintercept = -log10(0.05),
+      linetype = "dashed"
+    ) +
+    theme_classic() +
+    labs(
+      title = comparison_name,
+      x = "Log2 fold change",
+      y = "-Log10 adjusted p-value"
+    )
+  
+  ggsave(
+    file.path(
+      out, "Figures",
+      paste0(comparison_name, "_Volcano.pdf")
+    ),
+    p,
+    width = 8,
+    height = 6
+  )
+  
+  summary_table <- rbind(
+    summary_table,
+    data.frame(
+      Comparison = comparison_name,
+      Tested = nrow(df),
+      Significant = nrow(sig),
+      Gain = nrow(gain),
+      Loss = nrow(loss)
+    )
+  )
+  
+  saveRDS(
+    d,
+    file.path(
+      out, "DiffBind",
+      paste0(comparison_name, ".rds")
+    )
+  )
+}
+
+# ---------------------------------------
+# 7. Export analysis summary
+# ---------------------------------------
+
+write.csv(
+  summary_table,
+  file.path(out, "DiffBind", "DBR_summary_without_input.csv"),
+  row.names = FALSE
+)
+
+print(summary_table)
+
+cat("\nDifferential binding analysis completed.\n")
