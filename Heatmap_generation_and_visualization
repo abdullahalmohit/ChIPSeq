@@ -1,0 +1,107 @@
+
+# ============================================
+# 04_Heatmap.R
+# H3K27me3 differential binding heatmaps
+# ============================================
+
+library(DiffBind)
+
+base <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis"
+
+out <- file.path(base, "Figures", "Heatmaps")
+
+dir.create(
+  out,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# --------------------------------------------
+# 1. Load counted DiffBind object
+# --------------------------------------------
+
+db <- readRDS(
+  file.path(
+    base,
+    "DiffBind",
+    "Counted_DiffBind.rds"
+  )
+)
+
+# --------------------------------------------
+# 2. All-sample correlation heatmap
+# --------------------------------------------
+
+pdf(
+  file.path(out, "All_samples_correlation.pdf"),
+  width = 9,
+  height = 8
+)
+
+dba.plotHeatmap(
+  db,
+  correlations = TRUE,
+  attributes = DBA_CONDITION
+)
+
+dev.off()
+
+# --------------------------------------------
+# 3. Differential binding heatmaps
+# --------------------------------------------
+
+comparisons <- c("FIE_vs_Control", "AmirFIE_vs_Control", "AmirFIE_vs_FIE")
+
+for (comparison in comparisons) {
+  
+  cat("Generating heatmap:", comparison, "\n")
+  
+  file <- file.path(
+    base,
+    "DiffBind",
+    paste0(comparison, ".rds")
+  )
+  
+  stopifnot(file.exists(file))
+  
+  d <- readRDS(file)
+  
+  # Check whether significant regions exist
+  significant <- dba.report(
+    d,
+    contrast = 1,
+    method = DBA_DESEQ2,
+    th = 0.05
+  )
+  
+  if (length(significant) == 0) {
+    
+    message(
+      "No significant regions for: ",
+      comparison,
+      ". Skipping differential heatmap."
+    )
+    
+    next
+  }
+  
+  pdf(
+    file.path(
+      out,
+      paste0(comparison, "_Heatmap.pdf")
+    ),
+    width = 9,
+    height = 11
+  )
+  
+  dba.plotHeatmap(
+    d,
+    contrast = 1,
+    correlations = FALSE,
+    attributes = DBA_CONDITION
+  )
+  
+  dev.off()
+}
+
+cat("\nAll heatmaps completed.\n")
