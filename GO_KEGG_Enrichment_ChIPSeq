@@ -1,0 +1,315 @@
+library(clusterProfiler)
+library(org.At.tair.db)
+library(AnnotationDbi)
+library(enrichplot)
+library(ggplot2)
+
+base <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis"
+
+#comparisons <- c("ImbibedSeed_vs_10Day")
+comparisons <- c("FIE_vs_Control", "AmirFIE_vs_Control", "AmirFIE_vs_FIE")
+
+dir.create(file.path(base, "GO"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(base, "KEGG"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(base, "Figures"), showWarnings = FALSE, recursive = TRUE)
+
+readGenes <- function(file) {
+  
+  if (!file.exists(file)) {
+    warning("File not found: ", file)
+    return(character())
+  }
+  
+  x <- scan(file, what = character(), quiet = TRUE)
+  
+  unique(x[!is.na(x) & nzchar(x)])
+}
+
+# Convert TAIR IDs to NCBI Entrez IDs
+toEntrez <- function(genes) {
+  
+  genes <- intersect(
+    genes,
+    keys(org.At.tair.db, keytype = "TAIR")
+  )
+  
+  if (length(genes) == 0) return(character())
+  
+  mapped <- AnnotationDbi::mapIds(
+    org.At.tair.db,
+    keys = genes,
+    column = "ENTREZID",
+    keytype = "TAIR",
+    multiVals = "first"
+  )
+  
+  unique(as.character(na.omit(mapped)))
+}
+
+# ============================================================
+# GAIN: GO AND KEGG ENRICHMENT
+# ============================================================
+
+for (comparison in comparisons) {
+  
+  direction <- "Gain"
+  
+  background <- readGenes(
+    file.path(
+      base, "Annotation",
+      paste0(comparison, "_ALL_Genes.txt")
+    )
+  )
+  
+  background <- intersect(
+    background,
+    keys(org.At.tair.db, keytype = "TAIR")
+  )
+  
+  genes <- readGenes(
+    file.path(
+      base, "Annotation",
+      paste0(comparison, "_Gain_Genes.txt")
+    )
+  )
+  
+  genes <- intersect(genes, background)
+  
+  if (length(genes) < 5 || length(background) < 5) {
+    message("Insufficient mapped genes: ", comparison, " Gain")
+    next
+  }
+  
+  prefix <- paste0(comparison, "_Gain")
+  
+  # -----------------------------
+  # GAIN GO ENRICHMENT
+  # -----------------------------
+  
+  go_gain <- enrichGO(
+    gene = genes,
+    universe = background,
+    OrgDb = org.At.tair.db,
+    keyType = "TAIR",
+    ont = "ALL",
+    pAdjustMethod = "BH",
+    pvalueCutoff = 0.05,
+    qvalueCutoff = 0.05,
+    readable = TRUE
+  )
+  
+  go_gain_df <- as.data.frame(go_gain)
+  
+  write.csv(
+    go_gain_df,
+    file.path(base, "GO", paste0(prefix, "_GO.csv")),
+    row.names = FALSE
+  )
+  
+  if (nrow(go_gain_df) > 0) {
+    
+    p_gain_go <- dotplot(
+      go_gain,
+      showCategory = 15,
+      split = "ONTOLOGY",
+      title = paste(comparison, "Gain - GO")
+    ) +
+      facet_grid(ONTOLOGY ~ ., scales = "free")
+    
+    ggsave(
+      file.path(base, "Figures", paste0(prefix, "_GO.png")),
+      plot = p_gain_go,
+      width = 10,
+      height = 35,
+      limitsize = FALSE
+    )
+  }
+  
+  # -----------------------------
+  # GAIN KEGG ENRICHMENT
+  # -----------------------------
+  
+  gene_entrez <- toEntrez(genes)
+  background_entrez <- toEntrez(background)
+  
+  if (length(gene_entrez) < 5 || length(background_entrez) < 5) {
+    message("Insufficient Entrez IDs for Gain KEGG: ", comparison)
+    next
+  }
+  
+  kegg_gain <- enrichKEGG(
+    gene = gene_entrez,
+    organism = "ath",
+    keyType = "ncbi-geneid",
+    universe = background_entrez,
+    pvalueCutoff = 0.05,
+    pAdjustMethod = "BH"
+  )
+  
+  kegg_gain_df <- as.data.frame(kegg_gain)
+  
+  write.csv(
+    kegg_gain_df,
+    file.path(base, "KEGG", paste0(prefix, "_KEGG.csv")),
+    row.names = FALSE
+  )
+  
+  if (nrow(kegg_gain_df) > 0) {
+    
+    p_gain_kegg <- dotplot(
+      kegg_gain,
+      showCategory = 15,
+      title = paste(comparison, "Gain - KEGG")
+    )
+    
+    ggsave(
+      file.path(base, "Figures", paste0(prefix, "_KEGG.png")),
+      plot = p_gain_kegg,
+      width = 9,
+      height = 15
+    )
+  }
+  
+  cat(
+    comparison,
+    "Gain | GO terms:", nrow(go_gain_df),
+    "| KEGG pathways:", nrow(kegg_gain_df),
+    "\n"
+  )
+}
+
+cat("\nGain enrichment completed.\n")
+
+# ============================================================
+# LOSS: GO AND KEGG ENRICHMENT
+# ============================================================
+
+for (comparison in comparisons) {
+  
+  direction <- "Loss"
+  
+  background <- readGenes(
+    file.path(
+      base, "Annotation",
+      paste0(comparison, "_ALL_Genes.txt")
+    )
+  )
+  
+  background <- intersect(
+    background,
+    keys(org.At.tair.db, keytype = "TAIR")
+  )
+  
+  genes <- readGenes(
+    file.path(
+      base, "Annotation",
+      paste0(comparison, "_Loss_Genes.txt")
+    )
+  )
+  
+  genes <- intersect(genes, background)
+  
+  if (length(genes) < 5 || length(background) < 5) {
+    message("Insufficient mapped genes: ", comparison, " Loss")
+    next
+  }
+  
+  prefix <- paste0(comparison, "_Loss")
+  
+  # -----------------------------
+  # LOSS GO ENRICHMENT
+  # -----------------------------
+  
+  go_loss <- enrichGO(
+    gene = genes,
+    universe = background,
+    OrgDb = org.At.tair.db,
+    keyType = "TAIR",
+    ont = "ALL",
+    pAdjustMethod = "BH",
+    pvalueCutoff = 0.05,
+    qvalueCutoff = 0.05,
+    readable = TRUE
+  )
+  
+  go_loss_df <- as.data.frame(go_loss)
+  
+  write.csv(
+    go_loss_df,
+    file.path(base, "GO", paste0(prefix, "_GO.csv")),
+    row.names = FALSE
+  )
+  
+  if (nrow(go_loss_df) > 0) {
+    
+    p_loss_go <- dotplot(
+      go_loss,
+      showCategory = 15,
+      split = "ONTOLOGY",
+      title = paste(comparison, "Loss - GO")
+    ) +
+      facet_grid(ONTOLOGY ~ ., scales = "free")
+    
+    ggsave(
+      file.path(base, "Figures", paste0(prefix, "_GO.png")),
+      plot = p_loss_go,
+      width = 10,
+      height = 20,
+      limitsize = FALSE
+    )
+  }
+  
+  # -----------------------------
+  # LOSS KEGG ENRICHMENT
+  # -----------------------------
+  
+  gene_entrez <- toEntrez(genes)
+  background_entrez <- toEntrez(background)
+  
+  if (length(gene_entrez) < 5 || length(background_entrez) < 5) {
+    message("Insufficient Entrez IDs for Loss KEGG: ", comparison)
+    next
+  }
+  
+  kegg_loss <- enrichKEGG(
+    gene = gene_entrez,
+    organism = "ath",
+    keyType = "ncbi-geneid",
+    universe = background_entrez,
+    pvalueCutoff = 0.05,
+    pAdjustMethod = "BH"
+  )
+  
+  kegg_loss_df <- as.data.frame(kegg_loss)
+  
+  write.csv(
+    kegg_loss_df,
+    file.path(base, "KEGG", paste0(prefix, "_KEGG.csv")),
+    row.names = FALSE
+  )
+  
+  if (nrow(kegg_loss_df) > 0) {
+    
+    p_loss_kegg <- dotplot(
+      kegg_loss,
+      showCategory = 15,
+      title = paste(comparison, "Loss - KEGG")
+    )
+    
+    ggsave(
+      file.path(base, "Figures", paste0(prefix, "_KEGG.png")),
+      plot = p_loss_kegg,
+      width = 9,
+      height = 15
+    )
+  }
+  
+  cat(
+    comparison,
+    "Loss | GO terms:", nrow(go_loss_df),
+    "| KEGG pathways:", nrow(kegg_loss_df),
+    "\n"
+  )
+}
+
+cat("\nLoss enrichment completed.\n")
