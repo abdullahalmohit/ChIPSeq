@@ -1,0 +1,194 @@
+library(ChIPseeker)
+library(txdbmaker)
+library(GenomicRanges)
+library(org.At.tair.db)
+library(AnnotationDbi)
+
+# ============================================================
+# 1. DIRECTORIES AND REFERENCE ANNOTATION
+# ============================================================
+
+base <- "/Users/abdullahalmohit/Desktop/ChiPSeq/Final_Analysis"
+
+gtf <- "/Users/abdullahalmohit/Desktop/ChiPSeq/genomic.nuclear.gff"
+
+stopifnot(file.exists(gtf))
+
+txdb <- makeTxDbFromGFF(gtf)
+
+dir.create(
+  file.path(base, "Annotation"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# ============================================================
+# 2. SELECT DATASET
+# ============================================================
+
+comparisons <- list(
+  FIE_vs_Control = c("FIE", "Control"),
+  AmirFIE_vs_Control = c("Amir-FIE", "Control"),
+  AmirFIE_vs_FIE = c("Amir-FIE", "FIE")
+)
+
+types <- c(
+  "ALL",
+  "Gain",
+  "Loss",
+  "Significant"
+)
+
+# ============================================================
+# 3. CONVERT DIFFBIND CSV TO GRANGES
+# ============================================================
+
+toGR <- function(df) {
+  
+  stopifnot(
+    all(c("seqnames", "start", "end") %in% names(df))
+  )
+  
+  makeGRangesFromDataFrame(
+    df,
+    keep.extra.columns = TRUE,
+    seqnames.field = "seqnames",
+    start.field = "start",
+    end.field = "end",
+    starts.in.df.are.0based = FALSE
+  )
+}
+
+# ============================================================
+# 4. CONVERT GENE IDS TO TAIR IDS
+# ============================================================
+
+toTAIR <- function(ids) {
+  
+  ids <- trimws(as.character(ids))
+  
+  result <- rep(NA_character_, length(ids))
+  
+  valid <- !is.na(ids) & nzchar(ids)
+  
+  # Already TAIR IDs
+  is_tair <- valid & grepl(
+    "^AT[1-5MC]G[0-9]{5}(\\.[0-9]+)?$",
+    ids,
+    ignore.case = TRUE
+  )
+  
+  result[is_tair] <- toupper(
+    sub("\\.[0-9]+$", "", ids[is_tair])
+  )
+  
+  # Identify numeric NCBI Entrez IDs
+  is_entrez <- valid & !is_tair & grepl(
+    "^[0-9]+$",
+    ids
+  )
+  
+  entrez <- unique(ids[is_entrez])
+  
+  entrez <- intersect(
+    entrez,
+    keys(org.At.tair.db, keytype = "ENTREZID")
+  )
+  
+  if (length(entrez) > 0) {
+    
+    mapping <- AnnotationDbi::mapIds(
+      org.At.tair.db,
+      keys = entrez,
+      keytype = "ENTREZID",
+      column = "TAIR",
+      multiVals = "first"
+    )
+    
+    result[is_entrez] <- unname(
+      mapping[ids[is_entrez]]
+    )
+  }
+  
+  result
+}
+
+# ============================================================
+# 5. ANNOTATION LOOP
+# ============================================================
+
+for (type in types) {
+  
+  input_file <- file.path(
+    base,
+    "DiffBind",
+    paste0(comparison, "_", type, ".csv")
+  )
+  
+  if (!file.exists(input_file)) {
+    warning("File not found: ", input_file)
+    next
+  }
+  
+  cat("\nProcessing:", comparison, type, "\n")
+  
+  df <- read.csv(
+    input_file,
+    check.names = FALSE
+  )
+  
+  if (nrow(df) == 0) {
+    message("No regions: ", comparison, " ", type)
+    next
+  }
+  
+  gr <- toGR(df)
+  
+  annotation <- annotatePeak(
+    gr,
+    TxDb = txdb,
+    tssRegion = c(-2000, 2000),
+    verbose = FALSE
+  )
+  
+  anno_df <- as.data.frame(annotation)
+  
+  # Convert gene IDs to TAIR
+  anno_df$TAIR <- toTAIR(anno_df$geneId)
+  
+  # Save annotated peaks
+  write.csv(
+    anno_df,
+    file.path(
+      base,
+      "Annotation",
+      paste0(comparison, "_", type, "_Annotated.csv")
+    ),
+    row.names = FALSE
+  )
+  
+  # Extract unique mapped genes
+  genes <- unique(
+    na.omit(anno_df$TAIR)
+  )
+  
+  write.table(
+    genes,
+    file.path(
+      base,
+      "Annotation",
+      paste0(comparison, "_", type, "_Genes.txt")
+    ),
+    row.names = FALSE,
+    col.names = FALSE,
+    quote = FALSE
+  )
+  
+  cat(
+    "Regions:", nrow(anno_df),
+    "| Mapped genes:", length(genes),
+    "\n"
+  )
+}
+
+cat("\nChIPseeker annotation completed.\n")
